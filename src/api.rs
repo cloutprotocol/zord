@@ -1626,6 +1626,13 @@ fn classify_mime(content_type: &str) -> &'static str {
         "html"
     } else if lower == "text/javascript" || lower == "application/javascript" {
         "javascript"
+    } else if lower == "application/json" || lower.ends_with("+json") {
+        // Most inscriptions on Zcash are zrc-20 / zrc-721 operations carried as
+        // JSON. Without this branch they fell through to "binary", which hid the
+        // overwhelming majority of the index from any text or metadata filter.
+        "json"
+    } else if lower == "application/xml" || lower.ends_with("+xml") {
+        "text"
     } else if lower.starts_with("text/") {
         "text"
     } else if lower.starts_with("audio/") {
