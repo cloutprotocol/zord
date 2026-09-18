@@ -183,6 +183,19 @@ impl Db {
         Ok(items)
     }
 
+    pub fn for_each_inscription<F>(&self, mut f: F) -> Result<()>
+    where
+        F: FnMut(String, String) -> Result<()>,
+    {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(INSCRIPTIONS)?;
+        for item in table.iter()? {
+            let (k, v) = item?;
+            f(k.value().to_string(), v.value().to_string())?;
+        }
+        Ok(())
+    }
+
     // Token operations
     pub fn deploy_token(&self, ticker: &str, info: &str) -> Result<()> {
         let write_txn = self.db.begin_write()?;

@@ -43,9 +43,31 @@ async fn main() -> Result<()> {
     let reindex = env::var("RE_INDEX")
         .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false);
+    let repair = env::var("REPAIR_ZRC721")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
+
     let db = db::Db::new(&db_path, reindex)?;
     let rpc = rpc::ZcashRpcClient::new();
+
+    if let Ok(txid) = env::var("GET_BLOCK_HEIGHT_FOR_TXID") {
+        tracing::info!("Looking up block height for txid: {}", txid);
+        let tx = rpc.get_raw_transaction(&txid).await?;
+        if let Some(hash) = tx.blockhash {
+            let block = rpc.get_block(&hash).await?;
+            tracing::info!("Transaction {} is in block {}", txid, block.height);
+            println!("{}", block.height); // Print to stdout for easy capture
+        } else {
+            tracing::error!("Transaction {} is not confirmed in a block yet", txid);
+        }
+        return Ok(());
+    }
+
     let indexer = indexer::Indexer::new(rpc, db.clone());
+
+    if repair {
+        indexer.repair_zrc721_mints()?;
+    }
 
     // Indexer runs alongside the HTTP server with automatic retry
     let indexer_handle = tokio::spawn(async move {

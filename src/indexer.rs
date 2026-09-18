@@ -34,6 +34,10 @@ impl Indexer {
         let start_height = std::env::var("ZSTART_HEIGHT")
             .unwrap_or("3132356".to_string())
             .parse::<u64>()?;
+        
+        let force_start = std::env::var("FORCE_START")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false);
 
         let zmq_url = std::env::var("ZMQ_URL").ok();
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
@@ -45,11 +49,22 @@ impl Indexer {
             tracing::warn!("ZMQ_URL not set, falling back to polling only");
         }
 
+        // FORCE_START rewinds the cursor to ZSTART_HEIGHT once; after that the cursor advances
+        // in-process so the loop does not re-index the same block forever.
+        let mut forced_cursor: Option<u64> = if force_start {
+            tracing::warn!("FORCE_START set: re-indexing from {}", start_height);
+            Some(start_height.saturating_sub(1))
+        } else {
+            None
+        };
+
         loop {
-            let current_height = self
-                .db
-                .get_latest_indexed_height()?
-                .unwrap_or(start_height - 1);
+            let last_indexed = self.db.get_latest_indexed_height()?;
+
+            let current_height = match forced_cursor {
+                Some(h) => h,
+                None => last_indexed.unwrap_or(start_height.saturating_sub(1)),
+            };
 
             // Retry RPC calls with backoff to handle transient network errors
             let chain_height = match self.rpc.get_block_count().await {
@@ -67,6 +82,9 @@ impl Indexer {
                 match self.index_block(next_height).await {
                     Ok(_) => {
                         tracing::info!("Indexed block {}", next_height);
+                        if forced_cursor.is_some() {
+                            forced_cursor = Some(next_height);
+                        }
                     }
                     Err(e) => {
                         tracing::error!("Error indexing block {}: {}", next_height, e);
@@ -86,6 +104,52 @@ impl Indexer {
                 }
             }
         }
+    }
+
+    pub fn repair_zrc721_mints(&self) -> Result<()> {
+        let start_height = std::env::var("REPAIR_START_HEIGHT")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+
+        let mut count = 0;
+        let mut skipped = 0;
+        tracing::info!("Starting ZRC-721 repair scan from block height {}...", start_height);
+        
+        self.db.for_each_inscription(|id, meta_raw| {
+            if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_raw) {
+                let height = meta["block_height"].as_u64().unwrap_or(0);
+                if height < start_height {
+                    return Ok(());
+                }
+
+                let content = meta["content"].as_str().unwrap_or("");
+                let sender = meta["sender"].as_str().unwrap_or("");
+                let txid = meta["txid"].as_str();
+                let vout = meta["vout"].as_u64().map(|v| v as u32);
+
+                if self.zrc721.process(
+                    "inscribe",
+                    &id,
+                    sender,
+                    content,
+                    txid,
+                    vout,
+                ).is_ok() {
+                    count += 1;
+                } else {
+                    skipped += 1;
+                }
+            }
+            Ok(())
+        })?;
+        tracing::info!(
+            "Repaired scan complete. Processed/Added: {}. Skipped/Failed: {} (from height {})",
+            count,
+            skipped,
+            start_height
+        );
+        Ok(())
     }
 
     async fn index_block(&self, height: u64) -> Result<()> {

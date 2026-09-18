@@ -23,3 +23,8 @@ Thumbs.db
 /data
 zord.db
 zord.log
+
+# local scratch — contains wallet key material, never commit
+.codex/
+zgods_collection.csv
+generate_zgods_csv.js

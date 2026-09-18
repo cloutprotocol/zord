@@ -27,6 +27,7 @@ pub struct TxResponse {
     pub hex: String,
     pub vin: Vec<Vin>,
     pub vout: Vec<Vout>,
+    pub blockhash: Option<String>,
 }
 
 #[allow(dead_code)]
